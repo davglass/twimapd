@@ -76,6 +76,7 @@ class TwitterUserAccount(object):
     return mail_boxes
 
   def select(self, path, rw=True):
+    print "Select: %s" % path
     return boxes[path]
 
   def create(self, path):
@@ -160,9 +161,11 @@ class TwitterImapMailbox(object):
     cur = self.conn.cursor()
     cur.execute('select message from messages where (folder = "%s")' % self.folder)
     counter = 0
-    for i in cursor:
+    for i in cur:
         counter += 1
-        yield counter, TwitterImapMessage(i[0], self.cache)
+        msg = simplejson.loads(i[0])
+        print "ID: %s" % msg['id']
+        yield counter, TwitterImapMessage(simplejson.loads(i[0]), self.cache)
         
 
 
@@ -217,7 +220,7 @@ class TwitterImapMessage(object):
     print "MESSAGE: %s" % info
     self.user = cache.get('user')
     self.info = info
-    self.id = info.id
+    self.id = info['id']
     self.cache = cache
     
     """
@@ -244,7 +247,7 @@ class TwitterImapMessage(object):
     print 'FLAGS:'
     flags = []
     #flags.append("\Seen")
-    if self.info.favorited:
+    if self.info['favorited']:
         flags.append("\Flagged")
 
 
@@ -261,44 +264,45 @@ class TwitterImapMessage(object):
     return flags
     
   def getInternalDate(self):
-    return rfc822date(time.localtime(self.info.created_at_in_seconds))
+    #return rfc822date(time.localtime(self.info['created_at_in_seconds']))
+    return rfc822date(time.localtime())
     
   def getHeaders(self, negate, *names):
     try:
-        user_name = self.info.recipient_screen_name
-    except AttributeError:
+        user_name = self.info['recipient_screen_name']
+    except KeyError:
         user_name = self.user.name
 
     uname = self.cache.get('username')
 
     try:
-        sender_name = self.info.sender_screen_name
-        sname = self.info.sender_screen_name
-    except AttributeError:
-        sender_name = self.info.user.screen_name
-        sname = self.info.user.name
+        sender_name = self.info['sender_screen_name']
+        sname = self.info['sender_screen_name']
+    except KeyError:
+        sender_name = self.info['user']['screen_name']
+        sname = self.info['user']['name']
 
     headers = [
         "To: %s <%s@twitter.com>" % (user_name, uname),
         "Envelope-To: %s@twitter.com" % uname,
         "Return-Path: %s@twitter.com" % sender_name, 
         "From: %s <%s@twitter.com>" % (sname, sender_name),
-        "Delivery-Date: %s" % self.info.created_at, 
-        "Date: %s" % self.info.created_at, 
-        "Subject: %s" % self.info.text.encode("utf-8"),
-        "Message-ID: <%s@twitter.com>" % self.info.id,
+        "Delivery-Date: %s" % self.info['created_at'], 
+        "Date: %s" % self.info['created_at'], 
+        "Subject: %s" % self.info['text'].encode("utf-8"),
+        "Message-ID: <%s@twitter.com>" % self.info['id'],
         "Content-Type: text/plain",
         "Mime-Version: 1.0",
-        "X-TwIMAP-ID: %s" % self.info.id,
+        "X-TwIMAP-ID: %s" % self.info['id'],
         "X-TwIMAP-USER: http://twitter.com/%s" % sender_name,
-        "X-TwIMAP-URL: http://twitter.com/%s/status/%s" % (sender_name, self.info.id)
+        "X-TwIMAP-URL: http://twitter.com/%s/status/%s" % (sender_name, self.info['id'])
     ]
     
-    if self.info.in_reply_to_status_id:
-        headers.append("References: <%s@twitter.com>" % self.info.in_reply_to_status_id)
-        headers.append("In-Reply-To: <%s@twitter.com>" % self.info.in_reply_to_status_id)
+    if 'in_reply_to_status_id' in self.info:
+        headers.append("References: <%s@twitter.com>" % self.info['in_reply_to_status_id'])
+        headers.append("In-Reply-To: <%s@twitter.com>" % self.info['in_reply_to_status_id'])
 
-    if self.info.favorited:
+    if 'favorited' in self.info:
         headers.append("X-TwIMAP-FAVORITED: yes")
 
     rawheaders = "\n".join(headers)
@@ -329,7 +333,7 @@ class TwitterImapMessage(object):
     return file(file_map[self.id])
     
   def getSize(self):
-    return len(self.info.text)
+    return len(self.info['text'])
     
   def isMultipart(self):
     return False
