@@ -19,12 +19,13 @@ from cStringIO import StringIO
 MAILBOXDELIMITER = "."
 boxes = {
     'Inbox': None,
-    'Sent': None,
-    'Mentions': None,
-    'Directs': None
+    #'Sent': None,
+    #'Mentions': None,
+    #'Directs': None
 }
 
 boxes_order = ['Inbox', 'Sent', 'Mentions', 'Directs']
+
 
 _statusRequestDict = {
     'MESSAGES': 'getMessageCount',
@@ -40,6 +41,13 @@ id_map = {}
 file_map = {}
 
 
+def saveMbox(conn, folder, data):
+    print "Saving: %s" % folder
+    cursor = conn.cursor()
+    for i in data:
+        cursor.execute("insert into messages (id, folder, seen, message) values (?, ?, 1, ?)", (i.id, folder, i.AsJsonString()))
+    conn.commit()
+
 class TwitterUserAccount(object):
   implements(imap4.IAccount)
 
@@ -47,14 +55,23 @@ class TwitterUserAccount(object):
     self.cache = cache
     self.user = cache.get('api').GetUser(cache.get('username'))
     self.cache.set('user', self.user)
+    
+
     for i in boxes:
-        boxes[i] = TwitterImapMailbox(i, self.cache)
+        if i == 'Inbox':
+            saveMbox(self.cache.get('conn'), 'Inbox', self.cache.get('api').GetFriendsTimeline())
+        elif i == 'Sent':
+            saveMbox(self.cache.get('conn'), 'Sent', self.cache.get('api').GetUserTimeline())
+        elif i == 'Mentions':
+            saveMbox(self.cache.get('conn'), 'Mentions', self.cache.get('api').GetReplies())
+        elif i == 'Directs':
+            saveMbox(self.cache.get('conn'), 'Directs', self.cache.get('api').GetDirectMessages())
 
   def listMailboxes(self, ref, wildcard):
     mail_boxes = []
     for i in boxes_order:
-        mailbox = boxes[i]
-        mail_boxes.append((i, mailbox))
+        boxes[i] = TwitterImapMailbox(i, self.cache)
+        mail_boxes.append((i, boxes[i]))
 
     return mail_boxes
 
@@ -90,17 +107,8 @@ class TwitterImapMailbox(object):
     self.api = cache.get('api')
     self.data = self.api
     self.listeners = []
+    self.conn = self.cache.get('conn')
 
-    
-    if folder == 'Inbox':
-        boxes_data[folder] = self.api.GetFriendsTimeline()
-    elif folder == 'Sent':
-        boxes_data[folder] = self.api.GetUserTimeline()
-    elif folder == 'Mentions':
-        boxes_data[folder] = self.api.GetReplies()
-    elif folder == 'Directs':
-        boxes_data[folder] = self.api.GetDirectMessages()
-    
     print "DATA :: %s" % boxes_data
 
     if folder in boxes_data:
@@ -115,13 +123,25 @@ class TwitterImapMailbox(object):
     return flags
 
   def getMessageCount(self):
-        return len(boxes_data[self.folder])
+        cur = self.conn.cursor()
+        cur.execute('select count(*) from messages where (folder = "%s")' % self.folder)
+        row = cur.fetchone()
+        return row[0]
+        #return len(boxes_data[self.folder])
 
   def getRecentCount(self):
-        return len(boxes_data[self.folder])
+        cur = self.conn.cursor()
+        cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
+        row = cur.fetchone()
+        return row[0]
+        #return len(boxes_data[self.folder])
 
   def getUnseenCount(self):
-        return len(boxes_data[self.folder])
+        cur = self.conn.cursor()
+        cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
+        row = cur.fetchone()
+        return row[0]
+        #return len(boxes_data[self.folder])
 
   def isWriteable(self):
     return True
@@ -137,6 +157,16 @@ class TwitterImapMailbox(object):
 
   def fetch(self, messages, uid):
     print "FETCH :: %s :: %s" % (messages, uid)
+    cur = self.conn.cursor()
+    cur.execute('select message from messages where (folder = "%s")' % self.folder)
+    counter = 0
+    for i in cursor:
+        counter += 1
+        yield counter, TwitterImapMessage(i[0], self.cache)
+        
+
+
+    """
     counter = 0
     if self.folder in boxes_data:
         if uid:
@@ -146,10 +176,12 @@ class TwitterImapMailbox(object):
             for i in boxes_data[self.folder]:
                 counter += 1
                 print "FETCHING %s :: %s :: %s" % (counter, i.id, i)
+                i.folder = self.folder
                 id_map[i.id] = TwitterImapMessage(i, self.cache)
                 yield counter, id_map[i.id]
     else:
         raise imap4.MailboxException("Not implemented")
+    """
 
   def addListener(self, listener):
     self.listeners.append(listener)
@@ -187,21 +219,23 @@ class TwitterImapMessage(object):
     self.info = info
     self.id = info.id
     self.cache = cache
-
+    
+    """
     conn = self.cache.get('conn')
     cur = conn.cursor()
     
-    cur.execute('select * from messages where (id = %s)' % self.id)
+    cur.execute('select * from messages where (folder = "%s") and (id = %s)' % (self.info.folder, self.id))
     row = cur.fetchone()
-    if row:
+    if not row:
         temp = open("/tmp/twimap_%s.status" % self.id, 'w')
         temp.write(self.info.text.encode("utf-8"))
         temp.close()
 
-        cur.execute('insert into messages (id, message) values (?, ?)', (self.id, self.info.text.encode("utf-8")))
+        cur.execute('insert into messages (id, message, folder) values (?, ?, ?)', (self.id, self.info.text.encode("utf-8"), self.info.folder))
         conn.commit()
 
     file_map[self.id] = "/tmp/twimap_%s.status" % self.id
+    """
     
   def getUID(self):
     return self.id
@@ -331,7 +365,7 @@ class TwitterCredentialsChecker():
         if createDB:
             sql = "create table log (key text, value text)"
             cur.execute(sql)
-            sql = "create table messages (id integer primary key, headers text, seen integer, message text)"
+            sql = "create table messages (id integer, folder text, headers text, seen integer, message text)"
             cur.execute(sql)
 
         cur.execute('delete from log where key = "lastcheck"')
