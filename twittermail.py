@@ -188,18 +188,9 @@ class TwitterImapMessage(object):
     self.id = info.id
     self.cache = cache
 
-    conn = self.cache.get('conn')
-    cur = conn.cursor()
-    
-    cur.execute('select * from messages where (id = %s)' % self.id)
-    row = cur.fetchone()
-    if row:
-        temp = open("/tmp/twimap_%s.status" % self.id, 'w')
-        temp.write(self.info.text.encode("utf-8"))
-        temp.close()
-
-        cur.execute('insert into messages (id, message) values (?, ?)', (self.id, self.info.text.encode("utf-8")))
-        conn.commit()
+    temp = open("/tmp/twimap_%s.status" % self.id, 'w')
+    temp.write(self.info.text.encode("utf-8"))
+    temp.close()
 
     file_map[self.id] = "/tmp/twimap_%s.status" % self.id
     
