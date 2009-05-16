@@ -192,8 +192,11 @@ class TwitterImapMessage(object):
     print 'FLAGS:'
     flags = []
     #flags.append("\Seen")
-    if self.info.favorited:
-        flags.append("\Flagged")
+    try:
+        if self.info.favorited:
+            flags.append("\Flagged")
+    except AttributeError:
+        pass
 
 
     """
@@ -242,12 +245,15 @@ class TwitterImapMessage(object):
         "X-TwIMAP-URL: http://twitter.com/%s/status/%s" % (sender_name, self.info.id)
     ]
     
-    if self.info.in_reply_to_status_id:
-        headers.append("References: <%s@twitter.com>" % self.info.in_reply_to_status_id)
-        headers.append("In-Reply-To: <%s@twitter.com>" % self.info.in_reply_to_status_id)
+    try:
+        if self.info.in_reply_to_status_id:
+            headers.append("References: <%s@twitter.com>" % self.info.in_reply_to_status_id)
+            headers.append("In-Reply-To: <%s@twitter.com>" % self.info.in_reply_to_status_id)
 
-    if self.info.favorited:
-        headers.append("X-TwIMAP-FAVORITED: yes")
+        if self.info.favorited:
+            headers.append("X-TwIMAP-FAVORITED: yes")
+    except AttributeError:
+        pass
 
     rawheaders = "\n".join(headers)
 
