@@ -45,7 +45,7 @@ def saveMbox(conn, folder, data):
     print "Saving: %s" % folder
     cursor = conn.cursor()
     for i in data:
-        cursor.execute("insert into messages (id, folder, seen, message) values (?, ?, 1, ?)", (i.id, folder, i.AsJsonString()))
+        cursor.execute("replace into messages (id, folder, seen, message) values (?, ?, 1, ?)", (i.id, folder, i.AsJsonString()))
     conn.commit()
 
 class TwitterUserAccount(object):
@@ -70,8 +70,9 @@ class TwitterUserAccount(object):
   def listMailboxes(self, ref, wildcard):
     mail_boxes = []
     for i in boxes_order:
-        boxes[i] = TwitterImapMailbox(i, self.cache)
-        mail_boxes.append((i, boxes[i]))
+        if i in boxes:
+            boxes[i] = TwitterImapMailbox(i, self.cache)
+            mail_boxes.append((i, boxes[i]))
 
     return mail_boxes
 
@@ -126,21 +127,21 @@ class TwitterImapMailbox(object):
   def getMessageCount(self):
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s")' % self.folder)
-        row = cur.fetchone()
+        row = cur.fetchall()[0]
         return row[0]
         #return len(boxes_data[self.folder])
 
   def getRecentCount(self):
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
-        row = cur.fetchone()
+        row = cur.fetchall()[0]
         return row[0]
         #return len(boxes_data[self.folder])
 
   def getUnseenCount(self):
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
-        row = cur.fetchone()
+        row = cur.fetchall()[0]
         return row[0]
         #return len(boxes_data[self.folder])
 
@@ -223,23 +224,6 @@ class TwitterImapMessage(object):
     self.id = info['id']
     self.cache = cache
     
-    """
-    conn = self.cache.get('conn')
-    cur = conn.cursor()
-    
-    cur.execute('select * from messages where (folder = "%s") and (id = %s)' % (self.info.folder, self.id))
-    row = cur.fetchone()
-    if not row:
-        temp = open("/tmp/twimap_%s.status" % self.id, 'w')
-        temp.write(self.info.text.encode("utf-8"))
-        temp.close()
-
-        cur.execute('insert into messages (id, message, folder) values (?, ?, ?)', (self.id, self.info.text.encode("utf-8"), self.info.folder))
-        conn.commit()
-
-    file_map[self.id] = "/tmp/twimap_%s.status" % self.id
-    """
-    
   def getUID(self):
     return self.id
     
@@ -281,56 +265,42 @@ class TwitterImapMessage(object):
     except KeyError:
         sender_name = self.info['user']['screen_name']
         sname = self.info['user']['name']
-
-    headers = [
-        "To: %s <%s@twitter.com>" % (user_name, uname),
-        "Envelope-To: %s@twitter.com" % uname,
-        "Return-Path: %s@twitter.com" % sender_name, 
-        "From: %s <%s@twitter.com>" % (sname, sender_name),
-        "Delivery-Date: %s" % self.info['created_at'], 
-        "Date: %s" % self.info['created_at'], 
-        "Subject: %s" % self.info['text'].encode("utf-8"),
-        "Message-ID: <%s@twitter.com>" % self.info['id'],
-        "Content-Type: text/plain",
-        "Mime-Version: 1.0",
-        "X-TwIMAP-ID: %s" % self.info['id'],
-        "X-TwIMAP-USER: http://twitter.com/%s" % sender_name,
-        "X-TwIMAP-URL: http://twitter.com/%s/status/%s" % (sender_name, self.info['id'])
-    ]
+    
+    headers = {
+        "to": "%s <%s@twitter.com>" % (user_name, uname),
+        "envelope-to": "%s@twitter.com" % uname,
+        "return-path": "%s@twitter.com" % sender_name, 
+        "from": "%s <%s@twitter.com>" % (sname, sender_name),
+        "delivery-date": "%s" % self.info['created_at'], 
+        "date": "%s" % self.info['created_at'], 
+        "subject": "%s" % self.info['text'].encode("utf-7"),
+        "message-id": "<%s@twitter.com>" % self.info['id'],
+        "content-type": "text/plain",
+        "mime-version": "1.0",
+        "x-twimap-id": "%s" % self.info['id'],
+        "x-twimap-user": "http://twitter.com/%s" % sender_name,
+        "x-twimap-url": "http://twitter.com/%s/status/%s" % (sender_name, self.info['id'])
+    }
     
     if 'in_reply_to_status_id' in self.info:
-        headers.append("References: <%s@twitter.com>" % self.info['in_reply_to_status_id'])
-        headers.append("In-Reply-To: <%s@twitter.com>" % self.info['in_reply_to_status_id'])
+        headers["references"] = "<%s@twitter.com>" % self.info['in_reply_to_status_id']
+        headers["in-reply-to"] = "<%s@twitter.com>" % self.info['in_reply_to_status_id']
 
     if 'favorited' in self.info:
-        headers.append("X-TwIMAP-FAVORITED: yes")
+        headers["x-twimap-favorited"] = "yes"
 
-    rawheaders = "\n".join(headers)
-
-
+    print "HEADERS: %s" % headers
     conn = self.cache.get('conn')
     cur = conn.cursor()
-    cur.execute('update messages set headers=? where (id = ?)', (rawheaders, self.id))
-    conn.commit()
-    
-    parser = Parser()
-    try:
-        message = parser.parsestr(rawheaders, True)
-    except UnicodeEncodeError:
-        headers[7] = 'Subject: Failed to parse subject'
-        rawheaders = "\n".join(headers)
-        message = parser.parsestr(rawheaders, True)
-    
-    headerDict = {}
-    for (name, value) in message.items():
-      headerDict[name.lower()] = value
+    cur.execute('update messages set headers=? where (id = ?)', ("\n".join(headers), self.id))
+    #conn.commit()
 
-    print "HEADERS: %s" % headerDict
-
-    return headerDict
+    return headers
     
   def getBodyFile(self):
-    return file(file_map[self.id])
+    print "getBodyFile::"
+    return StringIO(self.info['text'])
+    #return file(file_map[self.id])
     
   def getSize(self):
     return len(self.info['text'])
@@ -369,11 +339,10 @@ class TwitterCredentialsChecker():
         if createDB:
             sql = "create table log (key text, value text)"
             cur.execute(sql)
-            sql = "create table messages (id integer, folder text, headers text, seen integer, message text)"
+            sql = "create table messages (id integer primary key, folder text, headers text, seen integer, message text)"
             cur.execute(sql)
 
-        cur.execute('delete from log where key = "lastcheck"')
-        sql = 'insert into log (key, value) values ("lastcheck", "%s")' % rfc822date(time.localtime())
+        sql = 'replace into log (key, value) values ("lastcheck", "%s")' % rfc822date(time.localtime())
         print "SQL :: %s" % sql
         cur.execute(sql)
         conn.commit()
