@@ -163,7 +163,9 @@ class TwitterImapMailbox(object):
         counter += 1
         msg = simplejson.loads(i[0])
         #print "ID: %s" % msg['id']
-        yield counter, TwitterImapMessage(msg, self.cache)
+        mail = TwitterImapMessage(msg, self.cache)
+        print mail
+        yield counter, mail
         
 
   def addListener(self, listener):
