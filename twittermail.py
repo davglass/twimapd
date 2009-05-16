@@ -19,9 +19,9 @@ from cStringIO import StringIO
 MAILBOXDELIMITER = "."
 boxes = {
     'Inbox': None,
-    #'Sent': None,
-    #'Mentions': None,
-    #'Directs': None
+    'Sent': None,
+    'Mentions': None,
+    'Directs': None
 }
 
 boxes_order = ['Inbox', 'Sent', 'Mentions', 'Directs']
@@ -70,9 +70,8 @@ class TwitterUserAccount(object):
   def listMailboxes(self, ref, wildcard):
     mail_boxes = []
     for i in boxes_order:
-        if i in boxes:
-            boxes[i] = TwitterImapMailbox(i, self.cache)
-            mail_boxes.append((i, boxes[i]))
+        boxes[i] = TwitterImapMailbox(i, self.cache)
+        mail_boxes.append((i, boxes[i]))
 
     return mail_boxes
 
@@ -111,11 +110,6 @@ class TwitterImapMailbox(object):
     self.listeners = []
     self.conn = self.cache.get('conn')
 
-    print "DATA :: %s" % boxes_data
-
-    if folder in boxes_data:
-        print "LENGTH:: %s" % len(boxes_data[folder])
-
   def getHierarchicalDelimiter(self):
     return MAILBOXDELIMITER
 
@@ -125,6 +119,7 @@ class TwitterImapMailbox(object):
     return flags
 
   def getMessageCount(self):
+        print "getMessageCount"
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s")' % self.folder)
         row = cur.fetchall()[0]
@@ -132,6 +127,7 @@ class TwitterImapMailbox(object):
         #return len(boxes_data[self.folder])
 
   def getRecentCount(self):
+        print "getRecentCount"
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
         row = cur.fetchall()[0]
@@ -139,6 +135,7 @@ class TwitterImapMailbox(object):
         #return len(boxes_data[self.folder])
 
   def getUnseenCount(self):
+        print "getUnseenCount"
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
         row = cur.fetchall()[0]
@@ -165,27 +162,9 @@ class TwitterImapMailbox(object):
     for i in cur:
         counter += 1
         msg = simplejson.loads(i[0])
-        print "ID: %s" % msg['id']
-        yield counter, TwitterImapMessage(simplejson.loads(i[0]), self.cache)
+        #print "ID: %s" % msg['id']
+        yield counter, TwitterImapMessage(msg, self.cache)
         
-
-
-    """
-    counter = 0
-    if self.folder in boxes_data:
-        if uid:
-            for id in messages:
-                yield 1, id_map[id]
-        else:
-            for i in boxes_data[self.folder]:
-                counter += 1
-                print "FETCHING %s :: %s :: %s" % (counter, i.id, i)
-                i.folder = self.folder
-                id_map[i.id] = TwitterImapMessage(i, self.cache)
-                yield counter, id_map[i.id]
-    else:
-        raise imap4.MailboxException("Not implemented")
-    """
 
   def addListener(self, listener):
     self.listeners.append(listener)
@@ -218,7 +197,7 @@ class TwitterImapMessage(object):
   implements(imap4.IMessage)
   
   def __init__(self, info, cache):
-    print "MESSAGE: %s" % info
+    #print "MESSAGE: %s" % info
     self.user = cache.get('user')
     self.info = info
     self.id = info['id']
@@ -228,7 +207,7 @@ class TwitterImapMessage(object):
     return self.id
     
   def getFlags(self):
-    print 'FLAGS:'
+    #print 'FLAGS:'
     flags = []
     #flags.append("\Seen")
     if self.info['favorited']:
@@ -289,10 +268,10 @@ class TwitterImapMessage(object):
     if 'favorited' in self.info:
         headers["x-twimap-favorited"] = "yes"
 
-    print "HEADERS: %s" % headers
-    conn = self.cache.get('conn')
-    cur = conn.cursor()
-    cur.execute('update messages set headers=? where (id = ?)', ("\n".join(headers), self.id))
+    #print "HEADERS: %s" % headers
+    #conn = self.cache.get('conn')
+    #cur = conn.cursor()
+    #cur.execute('update messages set headers=? where (id = ?)', ("\n".join(headers), self.id))
     #conn.commit()
 
     return headers
