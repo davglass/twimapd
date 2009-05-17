@@ -38,12 +38,10 @@ _statusRequestDict = {
 
 id_map = {}
 
-def saveMbox(conn, folder, data):
+def saveMbox(cur, folder, data):
     print "Saving: %s" % folder
-    cursor = conn.cursor()
     for i in data:
-        cursor.execute("insert or ignore into messages (id, folder, message) values (?, ?, ?)", (i.id, folder, i.AsJsonString().encode('utf-8')))
-    conn.commit()
+        cur.execute("insert or ignore into messages (id, folder, message) values (?, ?, ?)", (i.id, folder, i.AsJsonString().encode('utf-8')))
 
 class TwitterUserAccount(object):
   implements(imap4.IAccount)
@@ -53,6 +51,7 @@ class TwitterUserAccount(object):
     self.cache = cache
     self.user = cache.get('api').GetUser(cache.get('username'))
     self.cache.set('user', self.user)
+    self.conn = self.cache.get('conn')
     
 
   def listMailboxes(self, ref, wildcard):
@@ -61,17 +60,27 @@ class TwitterUserAccount(object):
         boxes[i] = TwitterImapMailbox(i, self.cache)
         mail_boxes.append((i, boxes[i]))
     
+    cur = self.conn.cursor()
+    cur.execute('select value from log where (key = "folder") order by value')
+    for row in cur:
+        boxes[row[0]] = TwitterImapMailbox(row[0], self.cache)
+        mail_boxes.append((i, boxes[i]))
+
     return mail_boxes
 
   def select(self, path, rw=True):
     print "Select: %s" % path
-    print boxes[path]
+    if path == 'INBOX':
+        path = 'Inbox'
     return TwitterImapMailbox(path, self.cache)
 
   def close(self):
     return True
 
   def create(self, path):
+    cur = self.conn.cursor()
+    cur.execute('insert into log (key, value) values (?, ?)', ('folder', path))
+    self.conn.commit()
     return True
 
   def delete(self, path):
@@ -102,15 +111,29 @@ class TwitterImapMailbox(object):
     self.listeners = []
     self.conn = self.cache.get('conn')
 
+    cur = self.conn.cursor()
     if self.folder == 'Inbox':
-        saveMbox(self.cache.get('conn'), 'Inbox', self.cache.get('api').GetFriendsTimeline())
+        saveMbox(cur, 'Inbox', self.cache.get('api').GetFriendsTimeline())
     elif self.folder == 'Sent':
-        saveMbox(self.cache.get('conn'), 'Sent', self.cache.get('api').GetUserTimeline())
+        saveMbox(cur, 'Sent', self.cache.get('api').GetUserTimeline())
     elif self.folder == 'Mentions':
-        saveMbox(self.cache.get('conn'), 'Mentions', self.cache.get('api').GetReplies())
+        saveMbox(cur, 'Mentions', self.cache.get('api').GetReplies())
     elif self.folder == 'Directs':
-        saveMbox(self.cache.get('conn'), 'Directs', self.cache.get('api').GetDirectMessages())
+        saveMbox(cur, 'Directs', self.cache.get('api').GetDirectMessages())
 
+    if self.folder[0:1] == '#':
+        url = "http://search.twitter.com/search.json?q=%s" % self.folder.replace('#', '%23')
+        print "Search: %s" % url
+        json = self.api._FetchUrl(url)
+        data = simplejson.loads(json)
+        print "Data: %s" % data
+        items = []
+        for i in data['results']:
+            items.append(twitter.Status.NewFromJsonDict(i))
+        print items
+        #saveMbox(cur, self.folder, items)
+
+    self.conn.commit()
 
   def getHierarchicalDelimiter(self):
     return MAILBOXDELIMITER
@@ -145,26 +168,32 @@ class TwitterImapMailbox(object):
     return True
 
   def getUIDValidity(self):
-    return 100
+    return 0
 
   def getUID(self, messageNum):
     raise imap4.MailboxException("Not implemented")
 
   def getUIDNext(self):
-    return 1001
+    return 1
 
   def fetch(self, messages, uid):
     print "FETCH :: %s :: %s :: %s" % (self.folder, messages, uid)
     cur = self.conn.cursor()
 
     sql = 'select message, seen from messages where (folder = "%s") order by id' % self.folder
+    try:
+        if uid:
+            uid = len(messages)
+    except TypeError:
+        uid = False
 
     if uid:
         ids = []
-        for i in messages:
-            ids.append(i)
-        sql = 'select message, seen from messages where (folder = "%s") and (id = %s)' % (self.folder, id_map[ids[0]])
+        for id in messages:
+            ids.append("%s" % id_map[id])
+        sql = 'select message, seen from messages where (folder = "%s") and (id in (%s))' % (self.folder, ','.join(ids))
 
+    print "SQL: %s" % sql
     cur.execute(sql)
     counter = 0
     for i in cur:
@@ -198,15 +227,27 @@ class TwitterImapMailbox(object):
     raise imap4.MailboxException("Not implemented")
 
   def store(self, messageSet, flags, mode, uid):
+    print "STORE: %s :: %s :: %s :: %s" % (messageSet, flags, mode, uid)
     cur = self.conn.cursor()
     for i in messageSet:
-        sql = "update messages set seen = 1 where (id = %s)" % id_map[i]
-        print "SQL :: %s" % sql
-        cur.execute(sql)
+        if '\Flagged' in flags:
+            url = 'http://twitter.com/favorites/create/%s.json' % id_map[i]
+            if mode == -1:
+                url = 'http://twitter.com/favorites/destroy/%s.json' % id_map[i]
+            json = self.api._FetchUrl(url, post_data={})
+            data = simplejson.loads(json)
+            status = twitter.Status.NewFromJsonDict(data)
+            cur.execute("update messages set message = ? where (id = ?)", (status.AsJsonString().encode('utf-8'), id_map[i]))
+
+        if '\Seen' in flags:
+            seen = 1
+            if mode == -1:
+                seen = 0
+            sql = "update messages set seen = %s where (id = %s)" % (seen, id_map[i])
+            print "SQL :: %s" % sql
+            cur.execute(sql)
 
     self.conn.commit()
-    #for i in messageSet:
-    #    yield i, '\Seen'
 
   def expunge(self):
     raise imap4.MailboxException("Not implemented")
@@ -279,7 +320,8 @@ class TwitterImapMessage(object):
         "date": "%s" % self.info['created_at'], 
         "subject": "%s" % self.info['text'],
         "message-id": "<%s@twitter.com>" % self.info['id'],
-        "content-type": "text/plain",
+        "content-type": 'text/plain; charset="UTF-8"',
+        "content-transfer-encoding": "quoted-printable",
         "mime-version": "1.0",
         "x-twimap-id": "%s" % self.info['id'],
         "x-twimap-user": "http://twitter.com/%s" % sender_name,
@@ -299,7 +341,8 @@ class TwitterImapMessage(object):
     return headers
     
   def getBodyFile(self):
-    return StringIO(self.info['text'].encode("utf-8"))
+    txt = self.info['text'].encode("utf-8")
+    return StringIO(txt)
     
   def getSize(self):
     return len(self.info['text'])
@@ -321,7 +364,10 @@ class TwitterCredentialsChecker():
     self.cache = cache
 
   def requestAvatarId(self, credentials):
-    api = twitter.Api(username=credentials.username, password=credentials.password)
+    api = twitter.Api(username=credentials.username, password=credentials.password, input_encoding=None, request_headers={
+        'X-Twitter-Client': 'twIMAPd',
+        'X-Twitter-Client-Version': '.5'
+    })
     self.cache.set('api', api)
     self.cache.set('username', credentials.username)
     try:
@@ -338,10 +384,11 @@ class TwitterCredentialsChecker():
         if createDB:
             sql = "create table log (key text, value text)"
             cur.execute(sql)
-            sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, message text)"
+            sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
             cur.execute(sql)
 
-        sql = 'replace into log (key, value) values ("lastcheck", "%s")' % rfc822date(time.localtime())
+        cur.execute('delete from log where (key = "lastcheck")')
+        sql = 'insert into log (key, value) values ("lastcheck", "%s")' % rfc822date(time.localtime())
         print "SQL :: %s" % sql
         cur.execute(sql)
         conn.commit()
