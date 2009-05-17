@@ -1,20 +1,17 @@
+import simplejson, base64, urllib2, sys, re, twitter, time
+
 from twisted.internet import reactor
 from twisted.mail import imap4
 from twisted.mail.smtp import rfc822date
 from zope.interface import implements
 from twisted.internet import reactor, defer, protocol
-
 from twisted.cred import checkers, credentials, error as credError
-import simplejson, base64, urllib2, sys, re, twitter, time
 from urlparse import urlparse
 from urllib2 import HTTPError
 from email.parser import Parser
-from tempfile import NamedTemporaryFile
 from pysqlite2 import dbapi2 as sqlite
-
-
-
 from cStringIO import StringIO
+
 
 MAILBOXDELIMITER = "."
 boxes = {
@@ -24,8 +21,12 @@ boxes = {
     'Directs': None
 }
 
-boxes_order = ['Inbox', 'Sent', 'Mentions', 'Directs']
-
+boxes_order = [
+    'Inbox',
+    'Sent', 
+    'Mentions', 
+    'Directs'
+]
 
 _statusRequestDict = {
     'MESSAGES': 'getMessageCount',
@@ -34,50 +35,41 @@ _statusRequestDict = {
     'UIDVALIDITY': 'getUIDValidity',
     'UNSEEN': 'getUnseenCount'
 }
-boxes_data = {}
 
 id_map = {}
-
-file_map = {}
-
 
 def saveMbox(conn, folder, data):
     print "Saving: %s" % folder
     cursor = conn.cursor()
     for i in data:
-        cursor.execute("replace into messages (id, folder, seen, message) values (?, ?, 1, ?)", (i.id, folder, i.AsJsonString()))
+        cursor.execute("insert or ignore into messages (id, folder, message) values (?, ?, ?)", (i.id, folder, i.AsJsonString().encode('utf-8')))
     conn.commit()
 
 class TwitterUserAccount(object):
   implements(imap4.IAccount)
 
   def __init__(self, cache):
+    print "USER ACCOUNT"
     self.cache = cache
     self.user = cache.get('api').GetUser(cache.get('username'))
     self.cache.set('user', self.user)
     
-
-    for i in boxes:
-        if i == 'Inbox':
-            saveMbox(self.cache.get('conn'), 'Inbox', self.cache.get('api').GetFriendsTimeline())
-        elif i == 'Sent':
-            saveMbox(self.cache.get('conn'), 'Sent', self.cache.get('api').GetUserTimeline())
-        elif i == 'Mentions':
-            saveMbox(self.cache.get('conn'), 'Mentions', self.cache.get('api').GetReplies())
-        elif i == 'Directs':
-            saveMbox(self.cache.get('conn'), 'Directs', self.cache.get('api').GetDirectMessages())
 
   def listMailboxes(self, ref, wildcard):
     mail_boxes = []
     for i in boxes_order:
         boxes[i] = TwitterImapMailbox(i, self.cache)
         mail_boxes.append((i, boxes[i]))
-
+    
     return mail_boxes
 
   def select(self, path, rw=True):
     print "Select: %s" % path
-    return boxes[path]
+    print boxes[path]
+    return TwitterImapMailbox(path, self.cache)
+
+  def close(self):
+    return True
 
   def create(self, path):
     return True
@@ -110,6 +102,16 @@ class TwitterImapMailbox(object):
     self.listeners = []
     self.conn = self.cache.get('conn')
 
+    if self.folder == 'Inbox':
+        saveMbox(self.cache.get('conn'), 'Inbox', self.cache.get('api').GetFriendsTimeline())
+    elif self.folder == 'Sent':
+        saveMbox(self.cache.get('conn'), 'Sent', self.cache.get('api').GetUserTimeline())
+    elif self.folder == 'Mentions':
+        saveMbox(self.cache.get('conn'), 'Mentions', self.cache.get('api').GetReplies())
+    elif self.folder == 'Directs':
+        saveMbox(self.cache.get('conn'), 'Directs', self.cache.get('api').GetDirectMessages())
+
+
   def getHierarchicalDelimiter(self):
     return MAILBOXDELIMITER
 
@@ -119,52 +121,62 @@ class TwitterImapMailbox(object):
     return flags
 
   def getMessageCount(self):
-        print "getMessageCount"
         cur = self.conn.cursor()
         cur.execute('select count(*) from messages where (folder = "%s")' % self.folder)
         row = cur.fetchall()[0]
+        print "getMessageCount :: %s :: %s" % (self.folder, row[0])
         return row[0]
-        #return len(boxes_data[self.folder])
 
   def getRecentCount(self):
-        print "getRecentCount"
         cur = self.conn.cursor()
-        cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
+        cur.execute('select count(*) from messages where (folder = "%s") and (seen != 1)' % self.folder)
         row = cur.fetchall()[0]
+        print "getRecentCount :: %s :: %s" % (self.folder, row[0])
         return row[0]
-        #return len(boxes_data[self.folder])
 
   def getUnseenCount(self):
-        print "getUnseenCount"
         cur = self.conn.cursor()
-        cur.execute('select count(*) from messages where (folder = "%s") and (seen = 1)' % self.folder)
+        cur.execute('select count(*) from messages where (folder = "%s") and (seen != 1)' % self.folder)
         row = cur.fetchall()[0]
+        print "getUnseenCount :: %s :: %s" % (self.folder, row[0])
         return row[0]
-        #return len(boxes_data[self.folder])
 
   def isWriteable(self):
     return True
 
   def getUIDValidity(self):
-    return 1
+    return 100
 
   def getUID(self, messageNum):
     raise imap4.MailboxException("Not implemented")
 
   def getUIDNext(self):
-    return 1
+    return 1001
 
   def fetch(self, messages, uid):
-    print "FETCH :: %s :: %s" % (messages, uid)
+    print "FETCH :: %s :: %s :: %s" % (self.folder, messages, uid)
     cur = self.conn.cursor()
-    cur.execute('select message from messages where (folder = "%s")' % self.folder)
+
+    sql = 'select message, seen from messages where (folder = "%s") order by id' % self.folder
+
+    if uid:
+        ids = []
+        for i in messages:
+            ids.append(i)
+        sql = 'select message, seen from messages where (folder = "%s") and (id = %s)' % (self.folder, id_map[ids[0]])
+
+    cur.execute(sql)
     counter = 0
     for i in cur:
         counter += 1
         msg = simplejson.loads(i[0])
-        #print "ID: %s" % msg['id']
+        msg['counter'] = counter
+        msg['seen'] = i[1]
+        if self.folder == 'Directs':
+            msg['favorited'] = False
+        id_map[counter] = msg['id']
+        #print "ID: %s :: %s" % (counter, msg['id'])
         mail = TwitterImapMessage(msg, self.cache)
-        print mail
         yield counter, mail
         
 
@@ -186,8 +198,15 @@ class TwitterImapMailbox(object):
     raise imap4.MailboxException("Not implemented")
 
   def store(self, messageSet, flags, mode, uid):
-    print "Store: %s :: %s :: %s" % (messageSet, mode, uid)
-    raise imap4.MailboxException("Not implemented")
+    cur = self.conn.cursor()
+    for i in messageSet:
+        sql = "update messages set seen = 1 where (id = %s)" % id_map[i]
+        print "SQL :: %s" % sql
+        cur.execute(sql)
+
+    self.conn.commit()
+    #for i in messageSet:
+    #    yield i, '\Seen'
 
   def expunge(self):
     raise imap4.MailboxException("Not implemented")
@@ -206,12 +225,15 @@ class TwitterImapMessage(object):
     self.cache = cache
     
   def getUID(self):
-    return self.id
+    #return self.id
+    return self.info['counter']
     
   def getFlags(self):
     #print 'FLAGS:'
     flags = []
-    #flags.append("\Seen")
+    if self.info['seen']:
+        flags.append("\Seen")
+
     if self.info['favorited']:
         flags.append("\Flagged")
 
@@ -229,8 +251,9 @@ class TwitterImapMessage(object):
     return flags
     
   def getInternalDate(self):
+    #print "getInternalDate :: %s" % self.info
     #return rfc822date(time.localtime(self.info['created_at_in_seconds']))
-    return rfc822date(time.localtime())
+    return self.info['created_at']
     
   def getHeaders(self, negate, *names):
     try:
@@ -254,7 +277,7 @@ class TwitterImapMessage(object):
         "from": "%s <%s@twitter.com>" % (sname, sender_name),
         "delivery-date": "%s" % self.info['created_at'], 
         "date": "%s" % self.info['created_at'], 
-        "subject": "%s" % self.info['text'].encode("utf-7"),
+        "subject": "%s" % self.info['text'],
         "message-id": "<%s@twitter.com>" % self.info['id'],
         "content-type": "text/plain",
         "mime-version": "1.0",
@@ -262,26 +285,21 @@ class TwitterImapMessage(object):
         "x-twimap-user": "http://twitter.com/%s" % sender_name,
         "x-twimap-url": "http://twitter.com/%s/status/%s" % (sender_name, self.info['id'])
     }
-    
+
     if 'in_reply_to_status_id' in self.info:
         headers["references"] = "<%s@twitter.com>" % self.info['in_reply_to_status_id']
         headers["in-reply-to"] = "<%s@twitter.com>" % self.info['in_reply_to_status_id']
 
-    if 'favorited' in self.info:
+    if self.info['favorited']:
         headers["x-twimap-favorited"] = "yes"
 
-    #print "HEADERS: %s" % headers
-    #conn = self.cache.get('conn')
-    #cur = conn.cursor()
-    #cur.execute('update messages set headers=? where (id = ?)', ("\n".join(headers), self.id))
-    #conn.commit()
+    for i in headers:
+        headers[i] = headers[i].encode('utf-8', 'replace')
 
     return headers
     
   def getBodyFile(self):
-    print "getBodyFile::"
-    return StringIO(self.info['text'])
-    #return file(file_map[self.id])
+    return StringIO(self.info['text'].encode("utf-8"))
     
   def getSize(self):
     return len(self.info['text'])
@@ -320,7 +338,7 @@ class TwitterCredentialsChecker():
         if createDB:
             sql = "create table log (key text, value text)"
             cur.execute(sql)
-            sql = "create table messages (id integer primary key, folder text, headers text, seen integer, message text)"
+            sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, message text)"
             cur.execute(sql)
 
         sql = 'replace into log (key, value) values ("lastcheck", "%s")' % rfc822date(time.localtime())
