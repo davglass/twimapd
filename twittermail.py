@@ -42,6 +42,10 @@ def saveMbox(cur, folder, data):
     print "Saving: %s" % folder
     for i in data:
         cur.execute("insert or ignore into messages (id, folder, message) values (?, ?, ?)", (i.id, folder, i.AsJsonString().encode('utf-8')))
+            
+    if folder == 'Sent':
+        #Mark all messages in Sent as Read (since you sent them)
+        cur.execute("update messages set seen = 1 where (folder = 'Sent')")
 
 class TwitterUserAccount(object):
   implements(imap4.IAccount)
@@ -78,16 +82,17 @@ class TwitterUserAccount(object):
     return True
 
   def create(self, path):
+    return False
     cur = self.conn.cursor()
     cur.execute('insert into log (key, value) values (?, ?)', ('folder', path))
     self.conn.commit()
     return True
 
   def delete(self, path):
-    return True
+    return False
 
   def rename(self, oldname, newname):
-    return True
+    return False
 
   def isSubscribed(self, path):
     return True
@@ -121,6 +126,7 @@ class TwitterImapMailbox(object):
     elif self.folder == 'Directs':
         saveMbox(cur, 'Directs', self.cache.get('api').GetDirectMessages())
 
+    """
     if self.folder[0:1] == '#':
         url = "http://search.twitter.com/search.json?q=%s" % self.folder.replace('#', '%23')
         print "Search: %s" % url
@@ -131,8 +137,9 @@ class TwitterImapMailbox(object):
         for i in data['results']:
             items.append(twitter.Status.NewFromJsonDict(i))
         print items
+        #Duplicate ID's??
         #saveMbox(cur, self.folder, items)
-
+    """
     self.conn.commit()
 
   def getHierarchicalDelimiter(self):
@@ -247,10 +254,22 @@ class TwitterImapMailbox(object):
             print "SQL :: %s" % sql
             cur.execute(sql)
 
+        if '\Deleted' in flags:
+            deleted = 1
+            if mode == -1:
+                deleted = 0
+            sql = "update messages set deleted = %s where (id = %s)" % (deleted, id_map[i])
+            print "SQL :: %s" % sql
+            cur.execute(sql)
+
     self.conn.commit()
 
   def expunge(self):
-    raise imap4.MailboxException("Not implemented")
+    cur = self.conn.cursor()
+    sql = "delete from messages where (deleted = 1)"
+    print "SQL :: %s" % sql
+    cur.execute(sql)
+    self.conn.commit()
 
   def destroy(self):
     raise imap4.MailboxException("Not implemented")
