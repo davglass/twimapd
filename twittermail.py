@@ -186,6 +186,7 @@ class TwitterImapMailbox(object):
   def fetch(self, messages, uid):
     print "FETCH :: %s :: %s :: %s" % (self.folder, messages, uid)
     cur = self.conn.cursor()
+    counter = 0
 
     sql = 'select message, seen from messages where (folder = "%s") order by id' % self.folder
     try:
@@ -196,13 +197,16 @@ class TwitterImapMailbox(object):
 
     if uid:
         ids = []
+        first = 0
         for id in messages:
+            if first == 0:
+                first = id
             ids.append("%s" % id_map[id])
         sql = 'select message, seen from messages where (folder = "%s") and (id in (%s))' % (self.folder, ','.join(ids))
+        counter = first - 1
 
     print "SQL: %s" % sql
     cur.execute(sql)
-    counter = 0
     for i in cur:
         counter += 1
         msg = simplejson.loads(i[0])
