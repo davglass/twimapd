@@ -18,14 +18,16 @@ boxes = {
     'Inbox': None,
     'Sent': None,
     'Mentions': None,
-    'Directs': None
+    'Directs': None,
+    'Favorites': None
 }
 
 boxes_order = [
     'Inbox',
     'Sent', 
     'Mentions', 
-    'Directs'
+    'Directs',
+    'Favorites'
 ]
 
 _statusRequestDict = {
@@ -43,9 +45,9 @@ def saveMbox(cur, folder, data):
     for i in data:
         cur.execute("insert or ignore into messages (id, folder, message) values (?, ?, ?)", (i.id, folder, i.AsJsonString().encode('utf-8')))
             
-    if folder == 'Sent':
+    if folder == 'Sent' or folder == 'Favorites':
         #Mark all messages in Sent as Read (since you sent them)
-        cur.execute("update messages set seen = 1 where (folder = 'Sent')")
+        cur.execute("update messages set seen = 1 where (folder = '%s')" % folder)
 
 class TwitterUserAccount(object):
   implements(imap4.IAccount)
@@ -125,6 +127,14 @@ class TwitterImapMailbox(object):
         saveMbox(cur, 'Mentions', self.cache.get('api').GetReplies())
     elif self.folder == 'Directs':
         saveMbox(cur, 'Directs', self.cache.get('api').GetDirectMessages())
+    elif self.folder == 'Favorites':
+        url = "http://twitter.com/favorites.json"
+        json = self.api._FetchUrl(url)
+        data = simplejson.loads(json)
+        items = []
+        for i in data:
+            items.append(twitter.Status.NewFromJsonDict(i))
+        saveMbox(cur, self.folder, items)
 
     """
     if self.folder[0:1] == '#':
