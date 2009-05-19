@@ -9,6 +9,8 @@ import simplejson, base64, urllib2, sys, re, twitter, time
 from urlparse import urlparse
 from urllib2 import HTTPError
 from email.parser import Parser
+from tempfile import NamedTemporaryFile
+from pysqlite2 import dbapi2 as sqlite
 
 
 
@@ -34,6 +36,8 @@ _statusRequestDict = {
 boxes_data = {}
 
 id_map = {}
+
+file_map = {}
 
 
 class TwitterUserAccount(object):
@@ -183,7 +187,21 @@ class TwitterImapMessage(object):
     self.info = info
     self.id = info.id
     self.cache = cache
+
+    conn = self.cache.get('conn')
+    cur = conn.cursor()
     
+    cur.execute('select * from messages where (id = %s)' % self.id)
+    row = cur.fetchone()
+    if row:
+        temp = open("/tmp/twimap_%s.status" % self.id, 'w')
+        temp.write(self.info.text.encode("utf-8"))
+        temp.close()
+
+        cur.execute('insert into messages (id, message) values (?, ?)', (self.id, self.info.text.encode("utf-8")))
+        conn.commit()
+
+    file_map[self.id] = "/tmp/twimap_%s.status" % self.id
     
   def getUID(self):
     return self.id
@@ -192,11 +210,8 @@ class TwitterImapMessage(object):
     print 'FLAGS:'
     flags = []
     #flags.append("\Seen")
-    try:
-        if self.info.favorited:
-            flags.append("\Flagged")
-    except AttributeError:
-        pass
+    if self.info.favorited:
+        flags.append("\Flagged")
 
 
     """
@@ -245,19 +260,21 @@ class TwitterImapMessage(object):
         "X-TwIMAP-URL: http://twitter.com/%s/status/%s" % (sender_name, self.info.id)
     ]
     
-    try:
-        if self.info.in_reply_to_status_id:
-            headers.append("References: <%s@twitter.com>" % self.info.in_reply_to_status_id)
-            headers.append("In-Reply-To: <%s@twitter.com>" % self.info.in_reply_to_status_id)
+    if self.info.in_reply_to_status_id:
+        headers.append("References: <%s@twitter.com>" % self.info.in_reply_to_status_id)
+        headers.append("In-Reply-To: <%s@twitter.com>" % self.info.in_reply_to_status_id)
 
-        if self.info.favorited:
-            headers.append("X-TwIMAP-FAVORITED: yes")
-    except AttributeError:
-        pass
+    if self.info.favorited:
+        headers.append("X-TwIMAP-FAVORITED: yes")
 
     rawheaders = "\n".join(headers)
 
 
+    conn = self.cache.get('conn')
+    cur = conn.cursor()
+    cur.execute('update messages set headers=? where (id = ?)', (rawheaders, self.id))
+    conn.commit()
+    
     parser = Parser()
     try:
         message = parser.parsestr(rawheaders, True)
@@ -275,7 +292,7 @@ class TwitterImapMessage(object):
     return headerDict
     
   def getBodyFile(self):
-    return StringIO(self.info.text.encode("utf-8"))
+    return file(file_map[self.id])
     
   def getSize(self):
     return len(self.info.text)
@@ -302,6 +319,27 @@ class TwitterCredentialsChecker():
     self.cache.set('username', credentials.username)
     try:
         user = api.GetDirectMessages()
+        try:
+            file = open("/tmp/%s_twimap.db" % credentials.username)
+        except IOError:
+            createDB = True
+        else:
+            createDB = False
+
+        conn = sqlite.connect("/tmp/%s_twimap.db" % credentials.username)
+        cur = conn.cursor()
+        if createDB:
+            sql = "create table log (key text, value text)"
+            cur.execute(sql)
+            sql = "create table messages (id integer primary key, headers text, seen integer, message text)"
+            cur.execute(sql)
+
+        cur.execute('delete from log where key = "lastcheck"')
+        sql = 'insert into log (key, value) values ("lastcheck", "%s")' % rfc822date(time.localtime())
+        print "SQL :: %s" % sql
+        cur.execute(sql)
+        conn.commit()
+        self.cache.set('conn', conn)
         return defer.succeed(credentials.username)
     except HTTPError:
       return defer.fail(credError.UnauthorizedLogin("Bad password - fool"))
