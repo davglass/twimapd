@@ -70,7 +70,7 @@ class TwitterUserAccount(object):
     cur.execute('select value from log where (key = "folder") order by value')
     for row in cur:
         boxes[row[0]] = TwitterImapMailbox(row[0], self.cache)
-        mail_boxes.append((i, boxes[i]))
+        mail_boxes.append((row[0], boxes[i]))
 
     return mail_boxes
 
@@ -84,11 +84,16 @@ class TwitterUserAccount(object):
     return True
 
   def create(self, path):
+    #return False
+    path = path.replace('INBOX.', '')
+    if path != 'Trash':
+        cur = self.conn.cursor()
+        print "Creating Folder: %s" % path
+        cur.execute('insert into log (key, value) values (?, ?)', ('folder', path))
+        self.conn.commit()
+        return True
+
     return False
-    cur = self.conn.cursor()
-    cur.execute('insert into log (key, value) values (?, ?)', ('folder', path))
-    self.conn.commit()
-    return True
 
   def delete(self, path):
     return False
@@ -136,20 +141,27 @@ class TwitterImapMailbox(object):
             items.append(twitter.Status.NewFromJsonDict(i))
         saveMbox(cur, self.folder, items)
 
-    """
     if self.folder[0:1] == '#':
         url = "http://search.twitter.com/search.json?q=%s" % self.folder.replace('#', '%23')
         print "Search: %s" % url
         json = self.api._FetchUrl(url)
         data = simplejson.loads(json)
-        print "Data: %s" % data
         items = []
         for i in data['results']:
-            items.append(twitter.Status.NewFromJsonDict(i))
+            #Fix Data Here
+            print "----------------------------------------------------------------------------"
+            print i
+            print "----------------------------------------------------------------------------"
+            i['user'] = {
+                'screen_name': i['from_user'],
+                'name': i['from_user']
+            }
+            status = twitter.Status.NewFromJsonDict(i)
+            status.SetFavorited(False)
+            items.append(status)
         print items
         #Duplicate ID's??
-        #saveMbox(cur, self.folder, items)
-    """
+        saveMbox(cur, self.folder, items)
     self.conn.commit()
 
   def getHierarchicalDelimiter(self):
@@ -308,8 +320,12 @@ class TwitterImapMessage(object):
     if self.info['seen']:
         flags.append("\Seen")
 
-    if self.info['favorited']:
-        flags.append("\Flagged")
+
+    try:
+        if self.info['favorited']:
+            flags.append("\Flagged")
+    except KeyError:
+        pass
 
 
     """
@@ -417,7 +433,10 @@ class TwitterCredentialsChecker():
         if createDB:
             sql = "create table log (key text, value text)"
             cur.execute(sql)
-            sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
+            #sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
+            sql = "create table messages (msgid integer primary key, id integer, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
+            cur.execute(sql)
+            sql = "create unique index messagelist on messages (id, folder)"
             cur.execute(sql)
 
         cur.execute('delete from log where (key = "lastcheck")')
