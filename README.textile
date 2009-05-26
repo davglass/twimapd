@@ -1,0 +1,47 @@
+h1. twIMAPd - Twitter based IMAP server
+
+This is a hack that creates a simple IMAP server in Python. But instead of
+serving mail messages, it pulls in the data from Twitter and formats the status messages as if they were emails.
+
+If you would like to test it without installing it, drop me a line and I'll send you my dev server info.
+
+h2. Features
+
+* Read/Unread statuses
+* Flagged messages marks as a Favorite
+
+h2. Requirements
+
+* Twisted Python: http://twistedmatrix.com/trac/
+* simplejson: easy_install simplejson
+* python-twitter: http://code.google.com/p/python-twitter/ (must install from lates source)
+* pysqlite2: http://oss.itsystementwicklung.de/trac/pysqlite/
+
+h2. Running
+
+* python imapserver.py
+
+h2. Using
+
+I have tested it against Mutt and Thunderbird (couldn't get Apple's Mail.app working)
+
+By default the IMAP server will run on port 1143. Simply put that into your mail client and use your Twitter login and password to connect.
+
+h2. Support
+
+Currently it will create 5 folders:
+
+* Inbox - Friends timeline
+* Sent - Your timeline
+* Directs - All direct messages
+* Mentions - All Mentions
+* Favorites - All your favorites
+
+h2. TODO
+
+* Better Caching - Timed?
+* Create a #hash folder and have it do a search (sort of works)
+* Add SSL support
+* Create an SMTP server to post messages back to twitter from the client
+* Folder Creation - For storing messages
+* Better support for other mail clients
