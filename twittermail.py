@@ -14,6 +14,7 @@ from cStringIO import StringIO
 
 
 MAILBOXDELIMITER = "."
+#The initial Mail Boxes, None's will be replaced with MailBox objects
 boxes = {
     'Inbox': None,
     'Sent': None,
@@ -22,6 +23,7 @@ boxes = {
     'Favorites': None
 }
 
+#The order they should be returned
 boxes_order = [
     'Inbox',
     'Sent', 
@@ -30,6 +32,7 @@ boxes_order = [
     'Favorites'
 ]
 
+#Hack for check status.
 _statusRequestDict = {
     'MESSAGES': 'getMessageCount',
     'RECENT': 'getRecentCount',
@@ -38,10 +41,12 @@ _statusRequestDict = {
     'UNSEEN': 'getUnseenCount'
 }
 
+#Maps the imap id (1-n) to the twitter message id
 id_map = {}
 
+#Grabs the twitter statuses and saves them to the local sqlite db
 def saveMbox(cur, folder, data):
-    print "Saving: %s" % folder
+    print "Saving: %s :: %s" % (folder, len(data))
     for i in data:
         cur.execute("insert or ignore into messages (id, folder, message) values (?, ?, ?)", (i.id, folder, i.AsJsonString().encode('utf-8')))
             
@@ -49,17 +54,19 @@ def saveMbox(cur, folder, data):
         #Mark all messages in Sent as Read (since you sent them)
         cur.execute("update messages set seen = 1 where (folder = '%s')" % folder)
 
+#The user account wrapper
 class TwitterUserAccount(object):
   implements(imap4.IAccount)
 
   def __init__(self, cache):
-    print "USER ACCOUNT"
+    #The cache we use to pass data from one class to another
     self.cache = cache
     self.user = cache.get('api').GetUser(cache.get('username'))
     self.cache.set('user', self.user)
+    #DB connection
     self.conn = self.cache.get('conn')
     
-
+  #Get all the mailboxes and setup the SQL DB
   def listMailboxes(self, ref, wildcard):
     mail_boxes = []
     for i in boxes_order:
@@ -67,13 +74,15 @@ class TwitterUserAccount(object):
         mail_boxes.append((i, boxes[i]))
     
     cur = self.conn.cursor()
+    #Pull all "extra" folders and set them up too.
     cur.execute('select value from log where (key = "folder") order by value')
     for row in cur:
         boxes[row[0]] = TwitterImapMailbox(row[0], self.cache)
-        mail_boxes.append((i, boxes[i]))
+        mail_boxes.append((row[0], boxes[i]))
 
-    return mail_boxes
+    return defer.succeed(mail_boxes)
 
+  #Select a mailbox
   def select(self, path, rw=True):
     print "Select: %s" % path
     if path == 'INBOX':
@@ -84,11 +93,16 @@ class TwitterUserAccount(object):
     return True
 
   def create(self, path):
+    #return False
+    path = path.replace('INBOX.', '')
+    if path != 'Trash':
+        cur = self.conn.cursor()
+        print "Creating Folder: %s" % path
+        cur.execute('insert into log (key, value) values (?, ?)', ('folder', path))
+        self.conn.commit()
+        return True
+
     return False
-    cur = self.conn.cursor()
-    cur.execute('insert into log (key, value) values (?, ?)', ('folder', path))
-    self.conn.commit()
-    return True
 
   def delete(self, path):
     return False
@@ -136,20 +150,24 @@ class TwitterImapMailbox(object):
             items.append(twitter.Status.NewFromJsonDict(i))
         saveMbox(cur, self.folder, items)
 
-    """
     if self.folder[0:1] == '#':
         url = "http://search.twitter.com/search.json?q=%s" % self.folder.replace('#', '%23')
         print "Search: %s" % url
         json = self.api._FetchUrl(url)
         data = simplejson.loads(json)
-        print "Data: %s" % data
         items = []
         for i in data['results']:
-            items.append(twitter.Status.NewFromJsonDict(i))
+            #Fix Data Here, make searches look like a real status message
+            i['user'] = {
+                'screen_name': i['from_user'],
+                'name': i['from_user']
+            }
+            status = twitter.Status.NewFromJsonDict(i)
+            status.SetFavorited(False)
+            items.append(status)
         print items
         #Duplicate ID's??
         #saveMbox(cur, self.folder, items)
-    """
     self.conn.commit()
 
   def getHierarchicalDelimiter(self):
@@ -245,6 +263,8 @@ class TwitterImapMailbox(object):
     return r
 
   def addMessage(self, msg, flags=None, date=None):
+    #print "Add Message: %s :: %s" % (msg, flags)
+    # passes a file handler here, need to cache fetchBodyFile so I can find the message id.
     raise imap4.MailboxException("Not implemented")
 
   def store(self, messageSet, flags, mode, uid):
@@ -308,8 +328,12 @@ class TwitterImapMessage(object):
     if self.info['seen']:
         flags.append("\Seen")
 
-    if self.info['favorited']:
-        flags.append("\Flagged")
+
+    try:
+        if self.info['favorited']:
+            flags.append("\Flagged")
+    except KeyError:
+        pass
 
 
     """
@@ -417,7 +441,12 @@ class TwitterCredentialsChecker():
         if createDB:
             sql = "create table log (key text, value text)"
             cur.execute(sql)
-            sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
+            #sql = "create table messages (id integer primary key, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
+            sql = "create table messages (msgid integer primary key, id integer, folder text, headers text, seen integer default 0, deleted integer default 0, message text)"
+            cur.execute(sql)
+            sql = "create unique index messagelist on messages (id, folder)"
+            cur.execute(sql)
+            sql = "create unique index folders on log (key, value)"
             cur.execute(sql)
 
         cur.execute('delete from log where (key = "lastcheck")')
