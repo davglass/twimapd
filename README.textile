@@ -11,13 +11,14 @@ h2. Features
 
 * Read/Unread statuses
 * Flagged messages marks as a Favorite
+* Threaded messages
 
 h2. Requirements
 
-* Twisted Python: http://twistedmatrix.com/trac/
+* "Twisted Python":http://twistedmatrix.com/trac/
 * simplejson: easy_install simplejson
-* python-twitter: http://code.google.com/p/python-twitter/ (must install from lates source)
-* pysqlite2: http://oss.itsystementwicklung.de/trac/pysqlite/
+* "python-twitter":http://code.google.com/p/python-twitter/ (must install from lates source)
+* "pysqlite2":http://oss.itsystementwicklung.de/trac/pysqlite/
 
 h2. Running
 
@@ -47,3 +48,13 @@ h2. TODO
 * Create an SMTP server to post messages back to twitter from the client
 * Folder Creation - For storing messages
 * Better support for other mail clients
+
+h2. Screen Shot
+
+I don't want to post a bunch of large screenshots here, so I will just link to them.
+
+"Inbox with a Favorite":http://skitch.com/davglass/bt2rg/inbox-for-davglass-twitter.com
+
+"Mentions":http://skitch.com/davglass/bt2r2/mentions-for-davglass-twitter.com
+
+"#yui search folder":http://skitch.com/davglass/bt2r7/yui-for-davglass-twitter.com
