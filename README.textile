@@ -5,6 +5,8 @@ serving mail messages, it pulls in the data from Twitter and formats the status 
 
 If you would like to test it without installing it, drop me a line and I'll send you my dev server info.
 
+Also looking for help. I'm not a python wiz, so if you are and would like to help, please do.
+
 h2. Features
 
 * Read/Unread statuses
